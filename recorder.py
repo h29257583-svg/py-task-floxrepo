@@ -407,10 +407,18 @@ def is_live_candidate(info):
 
 
 def stage_media_info(info, client):
-    if not info.get('url') or 'm3u8' not in str(info.get('protocol','')):
-        return None
-    fields=('id','title','url','protocol','http_headers','is_live','live_status','width','height','format_id','acodec','vcodec')
+    # Select locally from the already authenticated extraction; no second player request.
+    from yt_dlp import YoutubeDL
+    formats=info.get('formats') or []
+    with YoutubeDL({'quiet':True,'no_warnings':True}) as ydl:
+        selector=ydl.build_format_selector(FORMAT_SELECTOR)
+        selected=list(selector({'formats':formats,'has_merged_format':any(f.get('acodec') not in (None,'none') and f.get('vcodec') not in (None,'none') for f in formats),'incomplete_formats':False}))
+    choice=selected[-1] if selected else info
+    if not choice.get('url'):return None
+    fields=('id','title','is_live','live_status','extractor_key')
     data={key:info.get(key) for key in fields}
+    data.update({key:choice.get(key) for key in ('url','protocol','width','height','format_id','acodec','vcodec','ext')})
+    data['http_headers']={**(info.get('http_headers') or {}),**(choice.get('http_headers') or {})}
     filename=os.path.join(MEDIA_INFO_DIR,re.sub(r'[^A-Za-z0-9_-]','_',str(info['id'])+'-'+client_label(client))+'.json')
     fd,temporary=tempfile.mkstemp(prefix='selected-',dir=MEDIA_INFO_DIR)
     with os.fdopen(fd,'w') as stream:json.dump(data,stream)
@@ -423,7 +431,7 @@ def run_ytdlp_json(url, client):
         command = [sys.executable, "-m", "yt_dlp", "--no-config", "-J",
                    "--skip-download", "--no-warnings", "--ignore-no-formats-error",
                    "--extractor-retries", "1", "--socket-timeout", "10",
-                   "--playlist-items", "1", "-f", FORMAT_SELECTOR] + JS_ARGS
+                   "--playlist-items", "1"] + JS_ARGS
         if client:
             command += ["--extractor-args", f"youtube:player_client={client}"]
         if USE_COOKIES and COOKIE_FILE and os.path.isfile(COOKIE_FILE):
@@ -436,7 +444,11 @@ def run_ytdlp_json(url, client):
                 if raw.get("_type") == "playlist" and raw.get("entries"):
                     raw = next((item for item in raw["entries"] if item and is_live_candidate(item)), raw["entries"][0])
                 HEALTH.observe_metadata(raw if isinstance(raw,dict) else {})
-                return raw, metadata_state(raw)
+                reason=metadata_state(raw)
+                if reason=='unknown_metadata':
+                    error_reason=classify_message(result.stderr)
+                    if error_reason!='extraction_failed':return None,error_reason
+                return raw,reason
             reason = classify_message(result.stderr)
             log(f"probe_failed | client={client_label(client)} | reason={reason} | exit={result.returncode}")
             return None, reason

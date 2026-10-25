@@ -57,6 +57,7 @@ def configure_session(session,metadata,cookies):
     session.set_option('stream-segment-threads',1)
     session.set_option('hls-playlist-reload-attempts',1)
     session.set_option('hls-live-edge',3)
+    session.set_option('hls-start-offset',60)
     session.set_option('hls-segment-stream-data',True)
     session.http.headers.update(metadata.get('http_headers') or {})
     if cookies and Path(cookies).is_file():

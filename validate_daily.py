@@ -26,6 +26,8 @@ def main():
             report['stages'][stage]['transport_error_codes']=events[-20:]
         save();return result.returncode==0
     try:
+        from check_telegram import main as telegram_readiness
+        report['optional_telegram']=telegram_readiness()
         if os.environ.get('RUN_UNIT_TESTS')=='true':
             if not command('regression_tests',[sys.executable,'-m','unittest','test_reliability','test_retry_backoff','test_daily_reliability','-q'],timeout=180):return 1
         if os.environ.get('RUN_FAULT_TEST')=='true':

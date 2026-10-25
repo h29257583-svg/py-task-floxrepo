@@ -188,6 +188,8 @@ SUMMARY = {
     "chunk_count": 0,
     "status": "init",
     "failure_reason": None,
+    "download_attempts":0,
+    "transport_error_counts":{},
 }
 
 
@@ -786,6 +788,12 @@ def output_reader(stream, output_state):
         lowered = normalize_message(raw_line)
         if "chosen=" in raw_line or "error:" in lowered or "warning:" in lowered:
             log_raw("yt_dlp", raw_line)
+        if "error:" in lowered:
+            code=classify_message(lowered)
+            counts=SUMMARY.setdefault('transport_error_counts',{})
+            counts[code]=counts.get(code,0)+1
+            write_summary(transport_error_counts=counts,last_download_error=code)
+            if code in ('rate_limited','botcheck','access_denied'):HEALTH.observe(code)
         output_state["botcheck"] |= any(marker in lowered for marker in BOTCHECK_MARKERS)
         output_state["no_formats"] |= any(marker in lowered for marker in NO_FORMAT_MARKERS)
         output_state["rate_limited"] |= any(marker in lowered for marker in RATE_LIMIT_MARKERS)
@@ -881,6 +889,7 @@ def run_download_attempt(active, session_end, client, live_queue):
 
     command = make_download_cmd(active, chunk_path, client)
     left = max(0, session_end - time.time())
+    write_summary(download_attempts=SUMMARY.get('download_attempts',0)+1)
     log(f"[{hms(left)} left] download_started | chunk={index:04d} | client={client_label(client)}")
 
     try:

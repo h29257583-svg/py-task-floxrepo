@@ -17,6 +17,13 @@ def main():
     def command(stage,args,env=None,timeout=180):
         result=subprocess.run(args,env=env,capture_output=True,text=True,timeout=timeout)
         report['stages'][stage]={'status':'PASS' if result.returncode==0 else 'FAIL','exit_code':result.returncode}
+        if stage=='live_capture':
+            from hls_capture import MESSAGES
+            events=[]
+            for line in result.stdout.splitlines():
+                for reason,message in MESSAGES.items():
+                    if 'ERROR: '+message in line:events.append(reason)
+            report['stages'][stage]['transport_error_codes']=events[-20:]
         save();return result.returncode==0
     try:
         if os.environ.get('RUN_UNIT_TESTS')=='true':

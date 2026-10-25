@@ -14,6 +14,8 @@ def classify_message(message):
         return 'botcheck'
     if 'confirm your age' in text:
         return 'age_verification'
+    if 'no video formats found' in text or 'requested format is not available' in text:
+        return 'no_formats'
     if 'private video' in text:
         return 'private_video'
     if 'removed by the uploader' in text or 'video has been removed' in text:

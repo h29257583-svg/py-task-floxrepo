@@ -23,7 +23,7 @@ MESSAGES={'botcheck':"Sign in to confirm you're not a bot",'rate_limited':'Too m
           'age_verification':'Sign in to confirm your age','private_video':'Private video',
           'removed_video':'Video has been removed by the uploader','access_denied':'HTTP Error 403',
           'not_live':'The channel is not currently live','ended':'This live event has ended',
-          'network_error':'connection failed','extraction_failed':'download extraction failed'}
+          'network_error':'connection failed','no_formats':'No video formats found','extraction_failed':'download extraction failed'}
 
 
 def describe(reason):

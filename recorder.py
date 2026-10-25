@@ -12,6 +12,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unicodedata
@@ -22,6 +23,8 @@ HEALTH = ProbeHealth()
 _HTML_CACHE = {}
 _HTML_CACHE_LOCK = threading.Lock()
 _LAST_ENDPOINT_PROBE = float("-inf")
+MEDIA_INFO_DIR = tempfile.mkdtemp(prefix="private-recorder-media-")
+atexit.register(lambda: shutil.rmtree(MEDIA_INFO_DIR,ignore_errors=True))
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from queue import Empty, Queue
@@ -176,6 +179,7 @@ UNAVAILABLE_MARKERS = ["private video", "removed by the uploader", "video has be
 NORMAL_END_MARKERS = ["finished downloading", "download complete", "has already been downloaded"]
 
 
+SUMMARY_LOCK = threading.RLock()
 SUMMARY = {
     "channel": CHANNEL_HANDLE,
     "channel_url": CHANNEL_URL,
@@ -194,12 +198,15 @@ SUMMARY = {
 
 
 def write_summary(**updates):
-    SUMMARY.update(updates)
-    try:
-        with open(SUMMARY_PATH, "w", encoding="utf-8") as fh:
-            json.dump(SUMMARY, fh, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    with SUMMARY_LOCK:
+        SUMMARY.update(updates)
+        try:
+            temporary=SUMMARY_PATH+'.tmp'
+            with open(temporary,"w",encoding="utf-8") as fh:
+                json.dump(SUMMARY,fh,ensure_ascii=False,indent=2)
+            os.replace(temporary,SUMMARY_PATH)
+        except OSError:
+            pass
 
 
 def command_exists(name):
@@ -399,12 +406,24 @@ def is_live_candidate(info):
     return bool(info.get("is_live") or live_status == "is_live")
 
 
+def stage_media_info(info, client):
+    if not info.get('url') or 'm3u8' not in str(info.get('protocol','')):
+        return None
+    fields=('id','title','url','protocol','http_headers','is_live','live_status','width','height','format_id','acodec','vcodec')
+    data={key:info.get(key) for key in fields}
+    filename=os.path.join(MEDIA_INFO_DIR,re.sub(r'[^A-Za-z0-9_-]','_',str(info['id'])+'-'+client_label(client))+'.json')
+    fd,temporary=tempfile.mkstemp(prefix='selected-',dir=MEDIA_INFO_DIR)
+    with os.fdopen(fd,'w') as stream:json.dump(data,stream)
+    os.replace(temporary,filename)
+    return filename
+
+
 def run_ytdlp_json(url, client):
     def extract():
         command = [sys.executable, "-m", "yt_dlp", "--no-config", "-J",
                    "--skip-download", "--no-warnings", "--ignore-no-formats-error",
                    "--extractor-retries", "1", "--socket-timeout", "10",
-                   "--playlist-items", "1"] + JS_ARGS
+                   "--playlist-items", "1", "-f", FORMAT_SELECTOR] + JS_ARGS
         if client:
             command += ["--extractor-args", f"youtube:player_client={client}"]
         if USE_COOKIES and COOKIE_FILE and os.path.isfile(COOKIE_FILE):
@@ -450,7 +469,8 @@ def validate_candidate(video_id, client):
         HEALTH.observe('target_mismatch')
         log(f"candidate_rejected | reason={reason} | candidate_channel={info.get('channel_id')}")
         return None
-    return {"id": video_id, "url": watch_url, "client": client, "match_reason": reason}
+    return {"id":video_id,"url":watch_url,"client":client,"match_reason":reason,
+            "media_info_file":stage_media_info(info,client),"media_info_client":client_label(client),"media_info_created":time.time()}
 
 
 def verify_live_id(video_id, source_kind):
@@ -461,7 +481,8 @@ def verify_live_id(video_id, source_kind):
         candidate = validate_candidate(video_id, client)
         if candidate:
             log(f"detect_live | source={source_kind} | live id={video_id} | client={client_label(client)} | match={candidate['match_reason']}")
-            return {"id":video_id,"url":candidate["url"],"source":source_kind,"detected_client":client}
+            return {"id":video_id,"url":candidate["url"],"source":source_kind,"detected_client":client,
+                    **{key:candidate.get(key) for key in ('media_info_file','media_info_client','media_info_created')}}
         if not HEALTH.permitted() or HEALTH.snapshot()['last_reason'] in ('upcoming','ended','private_video','removed_video','age_verification','not_live_metadata'):
             break
     return None
@@ -486,7 +507,8 @@ def probe_fast():
             if matched:
                 video_id = info["id"]
                 log(f"detect_live | source=live_endpoint | live id={video_id} | client={client_label(client)} | match={reason}")
-                return {"id":video_id,"url":f"https://www.youtube.com/watch?v={video_id}","source":"live_endpoint","detected_client":client}
+                return {"id":video_id,"url":f"https://www.youtube.com/watch?v={video_id}","source":"live_endpoint","detected_client":client,
+                        "media_info_file":stage_media_info(info,client),"media_info_client":client_label(client),"media_info_created":time.time()}
         if not HEALTH.permitted():break
     return None
 
@@ -653,6 +675,9 @@ def new_session(live):
 
     active = {
         "live_id": live_id,
+        "media_info_file":live.get('media_info_file'),
+        "media_info_client":live.get('media_info_client'),
+        "media_info_created":live.get('media_info_created',0),
         "live_url": f"https://www.youtube.com/watch?v={live_id}",
         "preferred_client": live.get("detected_client", "web_safari"),
         "client_locked": True,
@@ -790,9 +815,10 @@ def output_reader(stream, output_state):
             log_raw("yt_dlp", raw_line)
         if "error:" in lowered:
             code=classify_message(lowered)
-            counts=SUMMARY.setdefault('transport_error_counts',{})
-            counts[code]=counts.get(code,0)+1
-            write_summary(transport_error_counts=counts,last_download_error=code)
+            with SUMMARY_LOCK:
+                counts=SUMMARY.setdefault('transport_error_counts',{})
+                counts[code]=counts.get(code,0)+1
+                write_summary(transport_error_counts=counts,last_download_error=code)
             if code in ('rate_limited','botcheck','access_denied'):HEALTH.observe(code)
         output_state["botcheck"] |= any(marker in lowered for marker in BOTCHECK_MARKERS)
         output_state["no_formats"] |= any(marker in lowered for marker in NO_FORMAT_MARKERS)
@@ -814,6 +840,9 @@ def make_download_cmd(active, chunk_path, client):
              "--format",FORMAT_SELECTOR,"--client",client_label(client)]
     if USE_COOKIES and COOKIE_FILE and os.path.isfile(COOKIE_FILE):
         command += ["--cookies",COOKIE_FILE]
+    selected=active.get('media_info_file')
+    if selected and os.path.isfile(selected) and active.get('media_info_client')==client_label(client) and time.time()-active.get('media_info_created',0)<120:
+        command += ['--metadata',selected]
     return command
 
 
@@ -1165,6 +1194,8 @@ try:
                 active = new_session(candidate)
             else:
                 active["offline_since"] = None
+                for key in ('media_info_file','media_info_client','media_info_created'):
+                    if candidate.get(key) is not None:active[key]=candidate[key]
                 # Seeing the same live video does not clear a download failure cooldown.
                 save_active_state(active)
 

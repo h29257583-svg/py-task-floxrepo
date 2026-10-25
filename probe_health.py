@@ -50,6 +50,8 @@ class ProbeHealth:
     def observe_metadata(self, info):
         # Public structural fields only; never URLs, headers, cookies, tokens or titles.
         fields={key:info.get(key) for key in ('id','_type','is_live','live_status','channel_id','extractor_key')}
+        fields['formats_count']=len(info.get('formats') or [])
+        fields['download_url_ready']=bool(info.get('url') and 'm3u8' in str(info.get('protocol','')))
         with self.lock:self.metadata_evidence=(self.metadata_evidence+[fields])[-4:]
 
     def observe(self, reason):

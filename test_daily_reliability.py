@@ -116,4 +116,13 @@ class FolderLinkTests(unittest.TestCase):
    with patch('publish_recordings.subprocess.run',side_effect=outputs):pub.resolve_session_url()
    self.assertEqual(pub.session_url,'https://drive.google.com/drive/folders/folder123')
 
+
+
+class MetadataStateTests(unittest.TestCase):
+ def test_missing_live_fields_are_unknown_not_offline(self):
+  from probe_health import metadata_state
+  for value in ({'_type':'playlist','entries':[]},{'_type':'url','id':'fixture1234'},{'id':'fixture1234'}):
+   self.assertEqual(metadata_state(value),'unknown_metadata')
+  self.assertEqual(metadata_state({'id':'fixture1234','is_live':False}),'not_live_metadata')
+  self.assertEqual(metadata_state({'id':'fixture1234','live_status':'is_live'}),'live')
 if __name__=='__main__':unittest.main()

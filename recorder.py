@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 import unicodedata
-from probe_health import ProbeHealth, classify_message, live_badge_ids
+from probe_health import ProbeHealth, classify_message, live_badge_ids, metadata_state
 from media_chunks import chunk_order, unique_chunk_paths
 
 HEALTH = ProbeHealth()
@@ -414,9 +414,8 @@ def run_ytdlp_json(url, client):
                 raw = json.loads(result.stdout)
                 if raw.get("_type") == "playlist" and raw.get("entries"):
                     raw = next((item for item in raw["entries"] if item and is_live_candidate(item)), raw["entries"][0])
-                reason = "live" if is_live_candidate(raw) else (
-                    "upcoming" if raw.get("live_status") == "is_upcoming" else "not_live_metadata")
-                return raw, reason
+                HEALTH.observe_metadata(raw if isinstance(raw,dict) else {})
+                return raw, metadata_state(raw)
             reason = classify_message(result.stderr)
             log(f"probe_failed | client={client_label(client)} | reason={reason} | exit={result.returncode}")
             return None, reason
@@ -477,13 +476,16 @@ def probe_fast():
     if time.monotonic() - _LAST_ENDPOINT_PROBE < 90:
         return None
     _LAST_ENDPOINT_PROBE = time.monotonic()
-    info = run_ytdlp_json(LIVE_URL, "web_safari")
-    if info and is_live_candidate(info):
-        matched, reason = target_match(info)
-        if matched:
-            video_id = info["id"]
-            log(f"detect_live | source=live_endpoint | live id={video_id} | client=web_safari | match={reason}")
-            return {"id":video_id,"url":f"https://www.youtube.com/watch?v={video_id}","source":"live_endpoint","detected_client":"web_safari"}
+    for client in VALIDATION_CLIENTS:
+        endpoint=LIVE_URL if client else (f"https://www.youtube.com/channel/{TARGET['channel_id']}/live" if TARGET.get('channel_id') else LIVE_URL)
+        info = run_ytdlp_json(endpoint, client)
+        if info and is_live_candidate(info):
+            matched, reason = target_match(info)
+            if matched:
+                video_id = info["id"]
+                log(f"detect_live | source=live_endpoint | live id={video_id} | client={client_label(client)} | match={reason}")
+                return {"id":video_id,"url":f"https://www.youtube.com/watch?v={video_id}","source":"live_endpoint","detected_client":client}
+        if not HEALTH.permitted():break
     return None
 
 

@@ -31,7 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - "@floxiclip|UCNty54b8Vzmk-9BRYfF0EVQ"
+          - "@LofiToneArt|UCIB228QNsdJDSX8bocYCZOA"
 
     steps:
       - name: Checkout Repository
